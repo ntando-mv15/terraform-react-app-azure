@@ -1,181 +1,289 @@
+# Deploy React App on Azure VM with Terraform
 
-# **Deploy a React Application on Ubuntu VM with Nginx**
-
-This guide provides step-by-step instructions to deploy and run a **This React application** on an **Ubuntu VM** using **Nginx**, making it accessible from a **public IP**.
+A hands-on Infrastructure as Code (IaC) project that provisions an Azure Ubuntu Virtual Machine using Terraform and deploys a React application served over HTTP.
 
 ---
 
+## Table of Contents
 
-## **1. Install Node.js and npm**  
-Since React requires **Node.js** and **npm**, install them first:  
+- [Deploy React App on Azure VM with Terraform](#deploy-react-app-on-azure-vm-with-terraform)
+  - [Table of Contents](#table-of-contents)
+  - [Project Overview](#project-overview)
+  - [Architecture](#architecture)
+  - [Prerequisites](#prerequisites)
+  - [Project Structure](#project-structure)
+  - [Infrastructure Provisioned](#infrastructure-provisioned)
+  - [Step-by-Step Deployment Guide](#step-by-step-deployment-guide)
+    - [Step 1: Clone This Repo](#step-1-clone-this-repo)
+    - [Step 2: Authenticate with Azure](#step-2-authenticate-with-azure)
+    - [Step 3: Initialize Terraform](#step-3-initialize-terraform)
+    - [Step 4: Plan and Apply](#step-4-plan-and-apply)
+    - [Step 5: SSH into the VM](#step-5-ssh-into-the-vm)
+    - [Step 6: Install Dependencies](#step-6-install-dependencies)
+    - [Step 7: Clone and Build the React App](#step-7-clone-and-build-the-react-app)
+    - [Step 8: Serve the App on Port 80](#step-8-serve-the-app-on-port-80)
+    - [Step 9: Test the Deployment](#step-9-test-the-deployment)
+  - [Clean Up Resources](#clean-up-resources)
+  - [Key Learnings](#key-learnings)
 
-```sh
-sudo apt update
-sudo apt install -y nodejs npm
+---
+
+## Project Overview
+
+This project demonstrates how to:
+
+- Use **Terraform** to provision cloud infrastructure on **Microsoft Azure**
+- Configure networking (VNet, Subnet, NSG, Public IP, NIC) programmatically
+- Deploy an **Ubuntu 20.04 VM** and connect via SSH
+- Install **Node.js, npm, and Git** on a fresh Linux server
+- Clone, build, and serve a **React application** from the VM
+
+> 🔗 React App Source: [pravinmishraaws/my-react-app](https://github.com/pravinmishraaws/my-react-app)
+
+---
+
+## Architecture
+
+```
+Internet
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│           Azure Resource Group          │
+│                                         │
+│  ┌─────────────────────────────────┐    │
+│  │        Virtual Network          │    │
+│  │   (10.0.0.0/16)                 │    │
+│  │                                 │    │
+│  │  ┌──────────────────────────┐   │    │
+│  │  │         Subnet           │   │    │
+│  │  │      (10.0.1.0/24)       │   │    │
+│  │  │                          │   │    │
+│  │  │  ┌────────────────────┐  │   │    │
+│  │  │  │   Ubuntu 20.04 VM  │  │   │    │
+│  │  │  │   (Standard_B1s)   │  │   │    │
+│  │  │  │                    │  │   │    │
+│  │  │  │  React App :80     │  │   │    │
+│  │  │  │  SSH         :22   │  │   │    │
+│  │  │  └────────────────────┘  │   │    │
+│  │  └──────────────────────────┘   │    │
+│  └─────────────────────────────────┘    │
+│                                         │
+│  NSG: Allow 22 (SSH) + 80 (HTTP)        │
+│  Public IP ──► NIC ──► VM              │
+└─────────────────────────────────────────┘
 ```
 
-Verify the installation:  
+---
 
-```sh
+## Prerequisites
+
+Before you begin, make sure you have the following installed and configured:
+
+1. Terraform >= 1.3.0 
+2. Azure CLI >= 2.40.0 
+3. An Azure Account
+
+---
+
+## Project Structure
+
+```
+terraform-react-azure/
+├── public/               
+├── src/                  # React app source code (components, styles, JS)
+├── terraform/
+│   └── main.tf           # Terraform config — provisions all Azure infrastructure
+├── .gitignore            # Excludes node_modules, Terraform state files, and secrets
+├── package-lock.json     
+├── package.json          
+└── README.md             # Project documentation and deployment guide
+```
+
+---
+
+## Infrastructure Provisioned
+
+The `main.tf` file provisions the following Azure resources:
+
+| Resource | Name in Azure | Terraform Resource |
+|----------|--------------|-------------------|
+| Resource Group | `reactapp_rg` | `azurerm_resource_group.app_rg` |
+| Virtual Network | `reactapp_vnet` | `azurerm_virtual_network.app_vnet` |
+| Subnet | `internal` (10.0.2.0/24) | `azurerm_subnet.internal` |
+| Network Security Group | `allowHTTPandSSH` | `azurerm_network_security_group.web_sg` |
+| Public IP Address | `appvm_ip` | `azurerm_public_ip.app_ip` |
+| Network Interface | `reactapp_nic` | `azurerm_network_interface.vm_nic` |
+| NIC ↔ NSG Association | — | `azurerm_network_interface_security_group_association.nic_nsg` |
+| Virtual Machine | `reactapp-vm` | `azurerm_virtual_machine.app_vm` |
+
+**VM Specs:**
+- OS: Ubuntu Server 22.04 LTS (Jammy)
+- Size: `Standard_D2ls_v5`
+- Admin user: `azureadmin`
+- Auth: Password-based
+
+---
+
+## Step-by-Step Deployment Guide
+
+### Step 1: Clone This Repo
+
+```bash
+git clone https://github.com/<your-username>/terraform-react-azure.git
+cd terraform-react-azure
+```
+
+### Step 2: Authenticate with Azure
+
+Log in to your Azure account via the CLI:
+
+```bash
+az login
+```
+
+A browser window will open. Sign in with your Azure credentials. Once authenticated, confirm your active subscription:
+
+```bash
+az account show
+```
+
+If you have multiple subscriptions, set the correct one:
+
+```bash
+az account set --subscription "<your-subscription-id>"
+```
+
+### Step 3: Initialize Terraform
+
+Download the Azure provider plugin and set up the working directory:
+
+```bash
+terraform init
+```
+
+You should see:
+
+```
+Terraform has been successfully initialized!
+```
+
+### Step 4: Plan and Apply
+
+Preview the infrastructure changes before creating anything:
+
+```bash
+terraform plan
+```
+
+Review the output — it will list every resource Terraform will create. When you're ready, apply:
+
+```bash
+terraform apply
+```
+
+Type `yes` when prompted to confirm. Provisioning typically takes **2–5 minutes**.
+
+At the end, Terraform will output your VM's **Public IP address**. Copy it — you'll need it in the next steps.
+
+### Step 5: SSH into the VM
+
+```bash
+ssh azureuser@<public-ip>
+```
+
+Replace `<public-ip>` with the IP address from the Terraform output. Accept the fingerprint prompt on first connection.
+
+> 💡 **Tip:** If you used an SSH key pair, make sure your private key is in `~/.ssh/` or specify it with `-i ~/.ssh/id_rsa`.
+
+### Step 6: Install Dependencies
+
+Once inside the VM, update the system and install the required tools:
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install nodejs npm git -y
+```
+
+Verify the installations:
+
+```bash
 node -v
 npm -v
+git --version
 ```
 
----
+> ⚠️ **Note:** The version of Node.js from the default Ubuntu apt repo may be outdated. If the React build fails, install a newer version using [NodeSource](https://github.com/nodesource/distributions):
+>
+> ```bash
+> curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+> sudo apt install -y nodejs
+> ```
 
-## **2. Install Nginx**  
-Update package lists and install **Nginx**:  
+### Step 7: Clone and Build the React App
 
-```sh
-sudo apt install -y nginx
-```
-
-Start and enable Nginx:  
-
-```sh
-sudo systemctl start nginx
-sudo systemctl enable nginx
-```
-
-Check Nginx status:  
-
-```sh
-systemctl status nginx
-```
-
----
-
-## **3. Clone the React Application from GitHub**  
-Navigate to a temporary directory and **clone the repository**:  
-
-```sh
+```bash
 git clone https://github.com/pravinmishraaws/my-react-app.git
 cd my-react-app
-```
-
-**Open the App.js file**
-
-Navigate to your React app’s source folder:
-
-```sh
-cd my-react-app/src
-```
-
-Open the App.js file in a text editor:
-
-```sh
-nano App.js
-```
-(or use vi/vim if you prefer)
-
-Modify the content
-
-```sh
-<h2>Deployed by: <strong>Your Full Name</strong></h2>
-<p>Date: <strong>DD/MM/YYYY</strong></p>
-```
-
-Update your details like: Your Full Name & Date
-
----
-
-## **4. Install Dependencies and Build the React App**  
-Install required dependencies:  
-
-```sh
 npm install
-```
-
-Build the React application:  
-
-```sh
 npm run build
 ```
 
-This will generate a **`build/`** folder with production-ready static files.
+The `build/` folder now contains the static production files.
+
+### Step 8: Serve the App on Port 80
+
+Install a lightweight static file server and serve the build output on port 80:
+
+```bash
+sudo npm install -g serve
+sudo serve -s build -l 80
+```
+
+> Alternatively, use `npx serve -s build -l 80` without a global install.
+
+To keep the app running after you disconnect your SSH session, use `pm2`:
+
+```bash
+sudo npm install -g pm2
+sudo pm2 serve build 80 --spa
+sudo pm2 startup
+sudo pm2 save
+```
+
+### Step 9: Test the Deployment
+
+Open a browser and navigate to:
+
+```
+http://<your-vm-public-ip>
+```
+
+You should see the React application homepage. Test navigation across the app to confirm it is fully functional.
 
 ---
 
-## **5. Deploy Build Files to Nginx Web Directory**  
-Remove any existing files in the Nginx web directory:  
+## Clean Up Resources
 
-```sh
-sudo rm -rf /var/www/html/*
+To avoid ongoing Azure charges, destroy all provisioned infrastructure when you're done:
+
+```bash
+terraform destroy
 ```
 
-Copy the React **build files** to `/var/www/html/`:  
+Type `yes` to confirm. This will delete the resource group and everything inside it.
 
-```sh
-sudo cp -r build/* /var/www/html/
-```
-
-Set proper permissions:  
-
-```sh
-sudo chown -R www-data:www-data /var/www/html
-sudo chmod -R 755 /var/www/html
-```
 
 ---
 
-## **6. Configure Nginx for React**  
-Nginx configuration file:   
+## Key Learnings
 
-```
-echo 'server {
-    listen 80;
-    server_name _;
-    root /var/www/html;
-    index index.html;
-    
-    location / {
-        try_files $uri /index.html;
-    }
-
-    error_page 404 /index.html;
-}' | sudo tee /etc/nginx/sites-available/default > /dev/null
-
-```
-
-Restart Nginx to apply the changes:  
-
-```sh
-sudo systemctl restart nginx
-```
+- **Terraform** declaratively manages cloud infrastructure, making environments reproducible and version-controlled
+- **Azure NSGs** act as virtual firewalls — only explicitly allowed ports are reachable
+- **`terraform plan`** is a dry-run that prevents surprises; always review before applying
+- **`terraform destroy`** cleanly removes all provisioned resources, avoiding cloud bill surprises
+- A React app's production output is a folder of static files that any static file server can serve
+- Running a process in the background with **pm2** keeps your app alive after SSH disconnects
 
 ---
 
-## **7. Find Your Public IP and Access the Application**  
-Retrieve the **public IP** of your Ubuntu VM:  
-
-```sh
-curl ifconfig.me
-```
-
-Now, students can **access the React application** in a browser using:  
-
-```
-http://<your-public-ip>
-```
-
-For example, if the public IP is **203.0.113.25**, visit:  
-
-```
-http://203.0.113.25
-```
-
----
-
-## **8. Verify the Deployment**  
-Ensure Nginx is correctly serving the React app:  
-
-```sh
-curl <your-public-ip>
-```
-
-If successful, your **React app is live!**  
-
----
-
-## **Your React App is Now Live on Ubuntu with Nginx!**  
-Now your **React application** is deployed on an **Ubuntu VM with Nginx**, accessible from a **public IP**. 
